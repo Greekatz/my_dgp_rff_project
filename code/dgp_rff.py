@@ -27,26 +27,8 @@ import time
 
 current_milli_time = lambda: int(round(time.time() * 1000))
 
-class DgpRff(object):
-    def __init__(self, likelihood_fun, num_examples, d_in, d_out, n_layers, n_rff, df, kernel_type, kernel_arccosine_degree, is_ard, local_reparam, feed_forward, q_Omega_fixed, theta_fixed, learn_Omega):
-        """
-        :param likelihood_fun: Likelihood function
-        :param num_examples: total number of input samples
-        :param d_in: Dimensionality of the input
-        :param d_out: Dimensionality of the output
-        :param n_layers: Number of hidden layers
-        :param n_rff: Number of random features for each layer
-        :param df: Number of GPs for each layer
-        :param kernel_type: Kernel type: currently only random Fourier features for RBF and arccosine kernels are implemented
-        :param kernel_arccosine_degree: degree parameter of the arccosine kernel
-        :param is_ard: Whether the kernel is ARD or isotropic
-        :param feed_forward: Whether the original inputs should be fed forward as input to each layer
-        :param Omega_fixed: Whether the Omega weights should be fixed throughout the optimization
-        :param theta_fixed: Whether covariance parameters should be fixed throughout the optimization
-        :param learn_Omega: How to treat Omega - fixed (from the prior), optimized, or learned variationally
-        :param local_reparam: Whether to use the local reparameterization trick or not
-        """
-        self.likelihood = likelihood_fun
+class DgpRff:
+    def __init__(self, num_examples, d_in, d_out, n_layers, n_rff, df, kernel_type, kernel_arccosine_degree, is_ard, local_reparam, feed_forward, q_Omega_fixed, theta_fixed, learn_Omega):
         self.kernel_type = kernel_type
         self.is_ard = is_ard
         self.feed_forward = feed_forward
@@ -58,99 +40,57 @@ class DgpRff(object):
         self.local_reparam = local_reparam
         self.arccosine_degree = kernel_arccosine_degree
 
-        ## These are all scalars
         self.num_examples = num_examples
-        self.nl = n_layers ## Number of hidden layers
-        self.n_Omega = n_layers  ## Number of weigh matrices is "Number of hidden layers"
+        self.nl = n_layers
+        self.n_Omega = n_layers
         self.n_W = n_layers
 
-        ## These are arrays to allow flexibility in the future
-        self.n_rff = n_rff * np.ones(n_layers, dtype = np.int32)
+        self.n_rff = n_rff * np.ones(n_layers, dtype=np.int32)
         self.df = df * np.ones(n_layers, dtype=np.int32)
 
-        ## Dimensionality of Omega matrices
         if self.feed_forward:
             self.d_in = np.concatenate([[d_in], self.df[:(n_layers - 1)] + d_in])
         else:
             self.d_in = np.concatenate([[d_in], self.df[:(n_layers - 1)]])
         self.d_out = self.n_rff
 
-        ## Dimensionality of W matrices
         if self.kernel_type == "RBF":
             self.dhat_in = self.n_rff * 2
             self.dhat_out = np.concatenate([self.df[:-1], [d_out]])
-
-        if self.kernel_type == "arccosine":
+        elif self.kernel_type == "arccosine":
             self.dhat_in = self.n_rff
             self.dhat_out = np.concatenate([self.df[:-1], [d_out]])
 
-        ## When Omega is learned variationally, define the right KL function and the way Omega are constructed
         if self.learn_Omega == "var_resampled":
-            self.get_kl = self.get_kl_Omega_to_learn
             self.sample_from_Omega = self.sample_from_Omega_to_learn
-
-        ## When Omega is optimized, fix some standard normals throughout the execution that will be used to construct Omega
-        if self.learn_Omega == "var_fixed":
-            self.get_kl = self.get_kl_Omega_to_learn
+        elif self.learn_Omega == "var_fixed":
             self.sample_from_Omega = self.sample_from_Omega_optim
-
-            self.z_for_Omega_fixed = []
-            for i in range(self.n_Omega):
-                tmp = utils.get_normal_samples(1, self.d_in[i], self.d_out[i])
-                self.z_for_Omega_fixed.append(tf.Variable(tmp[0,:,:], trainable = False))
-
-        ## When Omega is fixed, fix some standard normals throughout the execution that will be used to construct Omega
-        if self.learn_Omega == "prior_fixed":
-            self.get_kl = self.get_kl_Omega_fixed
+            self.z_for_Omega_fixed = [tf.Variable(utils.get_normal_samples(1, self.d_in[i], self.d_out[i])[0], trainable=False) for i in range(self.n_Omega)]
+        elif self.learn_Omega == "prior_fixed":
             self.sample_from_Omega = self.sample_from_Omega_fixed
+            self.z_for_Omega_fixed = [tf.Variable(utils.get_normal_samples(1, self.d_in[i], self.d_out[i])[0], trainable=False) for i in range(self.n_Omega)]
 
-            self.z_for_Omega_fixed = []
-            for i in range(self.n_Omega):
-                tmp = utils.get_normal_samples(1, self.d_in[i], self.d_out[i])
-                self.z_for_Omega_fixed.append(tf.Variable(tmp[0,:,:], trainable = False))
-
-        ## Parameters defining prior over Omega
         self.log_theta_sigma2 = tf.Variable(tf.zeros([n_layers]), name="log_theta_sigma2")
 
         if self.is_ard:
-            self.llscale0 = []
-            for i in range(self.nl):
-                self.llscale0.append(tf.constant(0.5 * np.log(self.d_in[i]), 'float32'))
+            self.llscale0 = [tf.constant(0.5 * np.log(self.d_in[i]), dtype=tf.float32) for i in range(self.nl)]
+            self.log_theta_lengthscale = [
+                tf.Variable(tf.multiply(tf.ones([self.d_in[i]]), self.llscale0[i]), name="log_theta_lengthscale")
+                for i in range(self.nl)
+            ]
         else:
-            self.llscale0 = tf.constant(0.5 * np.log(self.d_in))
-
-        if self.is_ard:
-            self.log_theta_lengthscale = []
-            for i in range(self.nl):
-                self.log_theta_lengthscale.append(tf.Variable(tf.multiply(tf.ones([self.d_in[i]]), self.llscale0[i]), name="log_theta_lengthscale"))
-        else:
+            self.llscale0 = tf.constant(0.5 * np.log(self.d_in), dtype=tf.float32)
             self.log_theta_lengthscale = tf.Variable(self.llscale0, name="log_theta_lengthscale")
-        self.prior_mean_Omega, self.log_prior_var_Omega = self.get_prior_Omega(self.log_theta_lengthscale)
 
-        ## Set the prior over weights
+        self.prior_mean_Omega, self.log_prior_var_Omega = self.get_prior_Omega(self.log_theta_lengthscale)
         self.prior_mean_W, self.log_prior_var_W = self.get_prior_W()
 
-        ## Initialize posterior parameters
-        if self.learn_Omega == "var_resampled":
+        if self.learn_Omega in ["var_resampled", "var_fixed"]:
             self.mean_Omega, self.log_var_Omega = self.init_posterior_Omega()
-        if self.learn_Omega == "var_fixed":
-            self.mean_Omega, self.log_var_Omega = self.init_posterior_Omega()
-
         self.mean_W, self.log_var_W = self.init_posterior_W()
 
-        ## Set the number of Monte Carlo samples as a placeholder so that it can be different for training and test
-        self.mc =  tf.placeholder(tf.int32)
-
-        ## Batch data placeholders
-        Din = d_in
-        Dout = d_out
-        self.X = tf.placeholder(tf.float32, [None, Din])
-        self.Y = tf.placeholder(tf.float32, [None, Dout])
-
-        ## Builds whole computational graph with relevant quantities as part of the class
-        self.loss, self.kl, self.ell, self.layer_out = self.get_nelbo()
-
-        ## Initialize the session
+        self.mc = tf.placeholder(tf.int32)
+        self.X = tf.placeholder(tf.float32, [None, d_in])
         self.session = tf.Session()
 
     ## Definition of a prior for Omega - which depends on the lengthscale of the covariance function
