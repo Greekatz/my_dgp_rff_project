@@ -395,7 +395,9 @@ class DgpRff:
             F = tf.matmul(Phi, W_from_q[i])
             self.layer.append(F)
         
-        return self.layer[-1][:,0,:]  # return 1st MC sample
+        output = self.layer[-1][:, 0, :]
+        return tf.nn.l2_normalize(output, axis=1)
+
     
     def triplet_loss_tf(anchor, positive, negative, margin=1.0):
         d_pos = tf.reduce_sum(tf.square(anchor - positive), axis=1)
