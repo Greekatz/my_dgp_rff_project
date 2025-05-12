@@ -227,15 +227,27 @@ class DgpRff(object):
     def sample_from_Omega_fixed(self):
         Omega_from_q = []
         for i in range(self.n_Omega):
-            z = tf.multiply(self.z_for_Omega_fixed[i], tf.ones([self.mc, self.d_in[i], self.d_out[i]]))
+            z = tf.multiply(
+                self.z_for_Omega_fixed[i],
+                tf.ones([self.mc, self.d_in[i], self.d_out[i]], dtype=tf.float32)
+            )
+
+            log_var_f32 = tf.cast(self.log_prior_var_Omega[i], tf.float32)
+            mean_f32 = tf.cast(self.prior_mean_Omega[i], tf.float32)
 
             if self.is_ard == True:
-                reshaped_log_prior_var_Omega = tf.tile(tf.reshape(self.log_prior_var_Omega[i] / 2, [self.d_in[i],1]), [1,self.d_out[i]])
-                Omega_from_q.append(tf.multiply(z, tf.exp(reshaped_log_prior_var_Omega)))
-            if self.is_ard == False:
-                Omega_from_q.append(tf.add(tf.multiply(z, tf.exp(self.log_prior_var_Omega[i] / 2)), self.prior_mean_Omega[i]))
+                reshaped_log_var = tf.tile(
+                    tf.reshape(log_var_f32 / 2.0, [self.d_in[i], 1]),
+                    [1, self.d_out[i]]
+                )
+                Omega_from_q.append(tf.multiply(z, tf.exp(reshaped_log_var)))
+            else:
+                Omega_from_q.append(
+                    tf.add(tf.multiply(z, tf.exp(log_var_f32 / 2.0)), mean_f32)
+                )
 
         return Omega_from_q
+
 
     ## Returns samples from approximate posterior over W
     def sample_from_W(self):

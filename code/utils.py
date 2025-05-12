@@ -64,7 +64,7 @@ def get_flags():
     flags.DEFINE_integer("task_index", 0, "")
     return FLAGS
 
-# ✅ Optimizer helper
+
 def get_optimizer(opt_name, learning_rate):
     optimizers = {
         "adagrad": tf.train.AdagradOptimizer(learning_rate),
