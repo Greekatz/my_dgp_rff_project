@@ -42,7 +42,7 @@ def get_normal_samples(ns, din, dout):
     """
     dx = np.amax(din)
     dy = np.amax(dout)
-    return tf.random_normal(shape=[ns, dx, dy], dtype="float32")
+    return tf.random_normal(shape=[ns, dx, dy], dtype=tf.float32)
 
 ## Log-sum operation
 def logsumexp(vals, dim=None):
