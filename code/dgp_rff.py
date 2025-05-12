@@ -421,3 +421,31 @@ class DgpRff(object):
                     print(" nll_test=" + "%.5f" % (nll_test / len(test.Y)), end = " ")
                 print(" time=" + repr(elapsed_time), end = " ")
                 print("")
+
+
+    def get_embedding_op(self, input_tensor, mc=1):
+        # input_tensor: tf.placeholder for anchor/positive/negative
+        self.mc = mc
+        Din = input_tensor.shape[1]
+        batch_size = tf.shape(input_tensor)[0]
+        self.layer = [tf.multiply(tf.ones([self.mc, batch_size, Din]), input_tensor)]
+        
+        Omega_from_q  = self.sample_from_Omega()
+        for i in range(self.nl):
+            layer_times_Omega = tf.matmul(self.layer[i], Omega_from_q[i])
+            if self.kernel_type == "RBF":
+                Phi = tf.exp(0.5 * self.log_theta_sigma2[i]) / tf.cast(tf.sqrt(1. * self.n_rff[i]), 'float32') * tf.concat([tf.cos(layer_times_Omega), tf.sin(layer_times_Omega)], axis=2)
+            else:
+                raise NotImplementedError("Only RBF kernel supported here")
+            
+            W_from_q = self.sample_from_W()
+            F = tf.matmul(Phi, W_from_q[i])
+            self.layer.append(F)
+        
+        return self.layer[-1][:,0,:]  # return 1st MC sample
+    
+    def triplet_loss_tf(anchor, positive, negative, margin=1.0):
+        d_pos = tf.reduce_sum(tf.square(anchor - positive), axis=1)
+        d_neg = tf.reduce_sum(tf.square(anchor - negative), axis=1)
+        return tf.reduce_mean(tf.maximum(d_pos - d_neg + margin, 0.0))
+
